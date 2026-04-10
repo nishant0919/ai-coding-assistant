@@ -115,17 +115,18 @@ function extractCodeFromResponse(response: string): string | null {
  */
 export async function processAgentAction(
   userMessage: string,
-  options: any = {}
+  options: any = {},
+  onUpdate?: (chunk: string) => void
 ): Promise<AgentAction> {
   const shouldEdit = detectEditIntent(userMessage);
   const fileContext = getActiveFileContent();
   const language = getActiveFileLanguage();
 
   if (shouldEdit && fileContext) {
-    return await handleEditAction(userMessage, fileContext.content, language, options);
+    return await handleEditAction(userMessage, fileContext.content, language, options, onUpdate);
   }
 
-  return await handleGeneralAction(userMessage, fileContext?.content || null, language, options);
+  return await handleGeneralAction(userMessage, fileContext?.content || null, language, options, onUpdate);
 }
 
 /**
@@ -135,11 +136,12 @@ async function handleEditAction(
   userMessage: string,
   fileContent: string,
   language: string,
-  options: any = {}
+  options: any = {},
+  onUpdate?: (chunk: string) => void
 ): Promise<AgentAction> {
   const prompt = buildEditPrompt(userMessage, fileContent, language);
 
-  const response = await queryGemini(prompt, options);
+  const response = await queryGemini(prompt, { ...options, onUpdate });
 
   if (!response.success) {
     if (response.error === 'NOT_FOUND') {
@@ -209,11 +211,12 @@ async function handleGeneralAction(
   userMessage: string,
   fileContent: string | null,
   language: string,
-  options: any = {}
+  options: any = {},
+  onUpdate?: (chunk: string) => void
 ): Promise<AgentAction> {
   const prompt = buildGeneralPrompt(userMessage, fileContent, language);
 
-  const response = await queryGemini(prompt, options);
+  const response = await queryGemini(prompt, { ...options, onUpdate });
 
   if (!response.success) {
     if (response.error === 'NOT_FOUND') {

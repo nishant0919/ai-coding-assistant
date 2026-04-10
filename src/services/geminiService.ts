@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
@@ -22,56 +22,115 @@ export function getTimeout(): number {
   return getConfig().get<number>('timeout', 120) * 1000;
 }
 
-export async function queryGemini(prompt: string, options: { sessionId?: string, yolo?: boolean } = {}): Promise<GeminiResponse> {
+let cachedGeminiPath: string | null = null;
+
+export async function queryGemini(
+  prompt: string, 
+  options: { sessionId?: string, yolo?: boolean, onUpdate?: (chunk: string) => void } = {}
+): Promise<GeminiResponse> {
   const model = getModel();
   const timeout = getTimeout();
   
-  try {
-    // We use a temp file to avoid Windows command length limits and escaping hell
-    const tmp = require('os').tmpdir();
-    const fs = require('fs');
-    const path = require('path');
-    const tmpFile = path.join(tmp, 'gemini_prompt_' + Date.now() + '.txt');
-    fs.writeFileSync(tmpFile, prompt, 'utf8');
+  return new Promise(async (resolve) => {
+    try {
+      const args: string[] = [];
+      args.push('--prompt', prompt);
 
-    // Run gemini using the file as input, this keeps it in "agent" mode rather than pipe mode
-    let command = `gemini "${tmpFile}"`;
-    if (model !== 'default') {
-      command += ` -m ${model}`;
-    }
-    
-    if (options.sessionId) {
-      command += ` --resume ${options.sessionId}`;
-    }
-    if (options.yolo) {
-      command += ' --yolo';
-    }
+      if (model !== 'default') args.push('-m', model);
+      if (options.sessionId) args.push('--resume', options.sessionId);
+      if (options.yolo) args.push('--yolo');
 
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const { stdout, stderr } = await execAsync(command, {
-      timeout: timeout,
-      maxBuffer: 1024 * 1024 * 10,
-      cwd: workspaceRoot
-    });
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+      
+      let executable = 'gemini';
+      let spawnArgs = args;
+      let usingNodeDirectly = false;
 
-    try { fs.unlinkSync(tmpFile); } catch { }
+      // Use cached path if available
+      if (process.platform === 'win32') {
+        if (!cachedGeminiPath) {
+          try {
+            const { stdout } = await execAsync('npm root -g');
+            const globalPath = stdout.trim();
+            const path = require('path');
+            const possiblePaths = [
+              path.join(globalPath, '@google', 'gemini-cli', 'bundle', 'gemini.js'),
+              path.join(globalPath, '@google', 'gemini-cli', 'bin', 'gemini.js'),
+              path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@google', 'gemini-cli', 'bundle', 'gemini.js')
+            ];
+            for (const p of possiblePaths) {
+              if (require('fs').existsSync(p)) {
+                cachedGeminiPath = p;
+                break;
+              }
+            }
+          } catch (e) { console.error('Error resolving npm root:', e); }
+        }
 
-    if (stderr && stderr.includes('Error')) {
-       return { text: '', success: false, error: stderr };
+        if (cachedGeminiPath) {
+          executable = 'node';
+          spawnArgs = [cachedGeminiPath, ...args];
+          usingNodeDirectly = true;
+        } else {
+          executable = 'gemini.cmd';
+        }
+      }
+
+      console.log(`[Gemini-CLI] Executing: ${executable} ${spawnArgs.join(' ')}`);
+
+      const geminiProcess = spawn(executable, spawnArgs, {
+        cwd: workspaceRoot,
+        env: { ...process.env, FORCE_COLOR: '0' }, // Disable colors for cleaner parsing
+        shell: (!usingNodeDirectly && process.platform === 'win32')
+      });
+
+      let fullText = '';
+      let stderrData = '';
+
+      geminiProcess.stdout.on('data', (data) => {
+        const chunk = data.toString();
+        // Basic cleaning for streaming
+        const cleanedChunk = chunk.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')
+                                  .replace(/[●◐◓◑◒]/g, '');
+        
+        fullText += cleanedChunk;
+        
+        if (options.onUpdate) {
+          options.onUpdate(fullText.trim());
+        }
+      });
+
+      geminiProcess.stderr.on('data', (data) => {
+        stderrData += data.toString();
+      });
+
+      const timer = setTimeout(() => {
+        geminiProcess.kill('SIGKILL');
+        resolve({ text: fullText.trim(), success: false, error: 'Request timed out' });
+      }, timeout);
+
+      geminiProcess.on('close', (code) => {
+        clearTimeout(timer);
+        
+        if (stderrData.includes('Error') && !fullText) {
+           resolve({ text: '', success: false, error: stderrData.trim() });
+           return;
+        }
+
+        resolve({ text: fullText.trim(), success: true });
+      });
+
+      geminiProcess.on('error', (error: any) => {
+        clearTimeout(timer);
+        resolve({ text: '', success: false, error: error.message });
+      });
+
+      geminiProcess.stdin.end();
+
+    } catch (error: any) {
+      resolve({ text: '', success: false, error: error.message });
     }
-
-    return { text: stdout.trim(), success: true };
-  } catch (error: any) {
-    let errorMessage = error.message || 'Unknown error';
-    if (errorMessage.includes('ModelNotFoundError')) {
-      errorMessage = `Model "${model}" not found. Please select a valid model from the dropdown.`;
-    } else if (errorMessage.includes('gemini is not recognized')) {
-      errorMessage = 'NOT_FOUND';
-    } else if (errorMessage.includes('429') || errorMessage.includes('capacity available') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
-      errorMessage = `The model "${model === 'default' ? 'Default CLI Model' : model}" is currently overloaded or out of capacity (Error 429). Please select a different model from the dropdown menu (🤖) and try again.`;
-    }
-    return { text: '', success: false, error: errorMessage };
-  }
+  });
 }
 
 export async function checkGeminiAvailable(): Promise<boolean> {

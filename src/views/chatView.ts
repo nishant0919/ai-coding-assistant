@@ -111,12 +111,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     try {
       this._log('Calling AI agent...');
-      const action: AgentAction = await processAgentAction(content.trim(), options);
+      const assistantId = this._genId();
+      
+      const action: AgentAction = await processAgentAction(content.trim(), options, (chunk) => {
+        // Only stream for non-edit actions or until action is finished
+        this._view?.webview.postMessage({
+          type: 'updateMessage',
+          id: assistantId,
+          content: chunk
+        });
+      });
+
       this._log('AI response type: ' + action.type);
 
       if (action.content === 'NOT_FOUND') {
         this._sendToWebview({
-          id: this._genId(),
+          id: assistantId,
           role: 'assistant',
           content: '⚠️ **Gemini CLI not found.**\n\nIt seems you don\'t have the Gemini CLI installed on your system. Please click the "Setup Gemini" button below to get started.',
           timestamp: Date.now(),
@@ -126,7 +136,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       this._sendToWebview({
-        id: this._genId(),
+        id: assistantId,
         role: 'assistant',
         content: action.content,
         timestamp: Date.now(),
