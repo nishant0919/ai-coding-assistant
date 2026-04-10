@@ -1,0 +1,89 @@
+{
+  "name": "ai-coding-assistant",
+  "displayName": "AI Coding Assistant",
+  "description": "AI-powered coding assistant using Gemini CLI",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "AI Coding Assistant",
+      "properties": {
+        "aiCodingAssistant.model": {
+          "type": "string",
+          "default": "default",
+          "enum": [
+            "default",
+            "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite-preview",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite"
+          ],
+          "description": "The Gemini model to use. 'default' uses your CLI's global setting."
+        },
+        "aiCodingAssistant.timeout": {
+          "type": "number",
+          "default": 120,
+          "minimum": 30,
+          "maximum": 300,
+          "description": "Request timeout in seconds."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ai-assistant",
+          "title": "AI Coding Assistant",
+          "icon": "$(comment)"
+        }
+      ]
+    },
+    "views": {
+      "ai-assistant": [
+        {
+          "type": "webview",
+          "id": "aiCodingAssistant.chat",
+          "name": "AI Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "aiCodingAssistant.clearChat",
+        "title": "Clear Chat",
+        "category": "AI Coding Assistant",
+        "icon": "$(clear-all)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "aiCodingAssistant.clearChat",
+          "when": "view == aiCodingAssistant.chat",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "eslint": "^8.56.0"
+  }
+}
