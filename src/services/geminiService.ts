@@ -25,12 +25,12 @@ export function getTimeout(): number {
 let cachedGeminiPath: string | null = null;
 
 export async function queryGemini(
-  prompt: string, 
+  prompt: string,
   options: { sessionId?: string, yolo?: boolean, onUpdate?: (chunk: string) => void } = {}
 ): Promise<GeminiResponse> {
   const model = getModel();
   const timeout = getTimeout();
-  
+
   return new Promise(async (resolve) => {
     try {
       const args: string[] = [];
@@ -41,7 +41,7 @@ export async function queryGemini(
       if (options.yolo) args.push('--yolo');
 
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
-      
+
       let executable = 'gemini';
       let spawnArgs = args;
       let usingNodeDirectly = false;
@@ -85,18 +85,25 @@ export async function queryGemini(
       });
 
       let fullText = '';
+      let lastSentText = '';
       let stderrData = '';
 
       geminiProcess.stdout.on('data', (data) => {
         const chunk = data.toString();
         // Basic cleaning for streaming
         const cleanedChunk = chunk.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')
-                                  .replace(/[●◐◓◑◒]/g, '');
-        
+          .replace(/[●◐◓◑◒]/g, '');
+
         fullText += cleanedChunk;
-        
+
         if (options.onUpdate) {
-          options.onUpdate(fullText.trim());
+          // Send only the NEW delta, not the entire accumulated text
+          // This prevents O(n^2) data transfer
+          const newContent = fullText.trim();
+          if (newContent !== lastSentText) {
+            lastSentText = newContent;
+            options.onUpdate(newContent);
+          }
         }
       });
 
@@ -111,10 +118,10 @@ export async function queryGemini(
 
       geminiProcess.on('close', (code) => {
         clearTimeout(timer);
-        
+
         if (stderrData.includes('Error') && !fullText) {
-           resolve({ text: '', success: false, error: stderrData.trim() });
-           return;
+          resolve({ text: '', success: false, error: stderrData.trim() });
+          return;
         }
 
         resolve({ text: fullText.trim(), success: true });

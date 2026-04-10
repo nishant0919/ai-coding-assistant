@@ -101,6 +101,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._isProcessing = true;
     this._sendSetLoading(true);
 
+    const startTime = Date.now();
+    let firstByteTime = 0;
+    let hasReceivedData = false;
+
     const userMsg: ChatMessage = {
       id: this._genId(),
       role: 'user',
@@ -112,17 +116,39 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     try {
       this._log('Calling AI agent...');
       const assistantId = this._genId();
-      
+
+      // Throttle streaming updates to avoid excessive postMessage calls
+      // This prevents UI lag and message queue overflow
+      let lastUpdateTime = 0;
+      const THROTTLE_MS = 50; // ~20 updates per second max
+      let pendingUpdate: string | null = null;
+
       const action: AgentAction = await processAgentAction(content.trim(), options, (chunk) => {
-        // Only stream for non-edit actions or until action is finished
-        this._view?.webview.postMessage({
-          type: 'updateMessage',
-          id: assistantId,
-          content: chunk
-        });
+        // Track time to first byte
+        if (!hasReceivedData && chunk.length > 0) {
+          firstByteTime = Date.now() - startTime;
+          hasReceivedData = true;
+          this._log(`⚡ First byte received: ${firstByteTime}ms`);
+        }
+
+        const now = Date.now();
+        pendingUpdate = chunk;
+
+        // Only send update if enough time has passed since last update
+        if (now - lastUpdateTime >= THROTTLE_MS) {
+          lastUpdateTime = now;
+          this._view?.webview.postMessage({
+            type: 'updateMessage',
+            id: assistantId,
+            content: pendingUpdate
+          });
+          pendingUpdate = null;
+        }
       });
 
-      this._log('AI response type: ' + action.type);
+      const totalTime = Date.now() - startTime;
+      this._log(`✅ AI response completed in ${totalTime}ms`);
+      this._log(`AI response type: ${action.type}`);
 
       if (action.content === 'NOT_FOUND') {
         this._sendToWebview({
@@ -135,12 +161,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      this._sendToWebview({
-        id: assistantId,
-        role: 'assistant',
-        content: action.content,
-        timestamp: Date.now(),
-      });
+      // Send any pending update that was throttled
+      if (pendingUpdate) {
+        this._view?.webview.postMessage({
+          type: 'updateMessage',
+          id: assistantId,
+          content: pendingUpdate
+        });
+      }
+
+      // Only send final message if content differs from last streamed update
+      // This prevents double-rendering after streaming completes
+      const lastStreamedContent = pendingUpdate || '';
+      if (action.content.trim() !== lastStreamedContent.trim()) {
+        this._sendToWebview({
+          id: assistantId,
+          role: 'assistant',
+          content: action.content,
+          timestamp: Date.now(),
+        });
+      }
     } catch (error: any) {
       this._log('Error: ' + error.message);
       this._sendToWebview({
@@ -159,7 +199,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._sendSetLoading(true);
     const result = await installGeminiCLI();
     this._sendSetLoading(false);
-    
+
     if (result.success) {
       vscode.window.showInformationMessage('Gemini CLI installed successfully! Now you need to login.');
       this._view?.webview.postMessage({ type: 'setupStep', step: 'login' });
